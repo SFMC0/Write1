@@ -1,0 +1,167 @@
+
+
+<script runat="server">
+Platform.Load("core","1");
+/* ------------------------  DE Key -------------------------- */
+try {
+  var SourceDE = DataExtension.Init("30BE6CCB-714B-488D-A73B-D6C6CC54CD90");
+
+  /* ------------------------ Filter for Lookup  --------------------------- */
+  var filter = {Property:"OptInFlag",SimpleOperator:"equals",Value:"0"};
+
+  /* ------------------------ REST API Authorization --------------------------- */
+
+  var payload, endpoint, response;
+  var TenantEndpoint = 'mcg2s16bskjpfgy84q21hj5b0yfm';
+  
+  
+  function decryptAccountId(id){
+    //Write("id:" + id);
+  Variable.SetValue("AccountId", id);
+  var scr = "";
+  scr += "\%\%[";
+  scr += "SET @account = DecryptSymmetric(@AccountId, 'AES', '34383008-a95a-42d6-a64c-2f60082b733a', @null, 'd66e7b63-bdce-4f51-ba72-0eb0ee73811a', @null, '54555681-74e2-48db-ae86-7a71470f36ab', @null)"
+  scr += "Output(Concat(@account))";
+  scr += "]\%\%";
+  return Platform.Function.TreatAsContent(scr);
+ }
+ function decryptKey(key) {
+   //Write("key:" + key);
+  Variable.SetValue("Key", key);
+  var scr = "";
+  scr += "\%\%[";
+  scr += "SET @key = DecryptSymmetric(@Key, 'AES', '34383008-a95a-42d6-a64c-2f60082b733a', @null, 'd66e7b63-bdce-4f51-ba72-0eb0ee73811a', @null, '54555681-74e2-48db-ae86-7a71470f36ab', @null)"
+  scr += "Output(Concat(@key))";
+  scr += "]\%\%";
+  return Platform.Function.TreatAsContent(scr);
+ }
+  
+  function retrievesfobjects(sphoneNumber) {
+    Variable.SetValue("aphoneNumber",sphoneNumber);
+    var retrieveSFObjectRecs = "";
+    retrieveSFObjectRecs += "\%\%[ ";
+    retrieveSFObjectRecs += "SET @salesforceFields = RetrieveSalesforceObjects('MC_SMS_Opt_Status__c','Id','SMS_Number__c','=',@aphoneNumber) "
+    retrieveSFObjectRecs += "Output(Concat(@salesforceFields))";
+    retrieveSFObjectRecs += "]\%\%";
+    Write("retrieveSFObjectRecs:" + retrieveSFObjectRecs);
+    return Platform.Function.TreatAsContent(retrieveSFObjectRecs);
+   } 
+  
+ var encrytionDE = DataExtension.Init("B6BEE7F0-71E6-4DBB-A8B1-8AD2164CBB03");
+ var encrytionDEAllRows = encrytionDE.Rows.Retrieve();
+ var encryptedId = encrytionDEAllRows[0]["clientid"];
+ var encryptedKey = encrytionDEAllRows[0]["clientsecrectkey"];
+ var clientID = decryptAccountId(encryptedId);
+ var clientSecret = decryptKey(encryptedKey); 
+  
+  //Write("clientSecret:" + clientID);
+  //Write("clientSecret:" + clientSecret);
+ 
+  
+
+  //var clientID = 'cwx5ju3p1wtc1rv9cqut66vf';
+// var clientSecret = 'g62dSDgJut0AdbPHr6LncM3O';
+  var mid = '514018449';
+  var contentType = 'application/json';
+  var debugging = false;
+  
+
+    /* ------------------------ Error Handling --------------------------- */
+
+    var errorDE = '';
+    var automationName = '';
+
+    /* -------------------  REST API Authorization --------------------- */
+
+    endpoint = 'https://' + TenantEndpoint + '.auth.marketingcloudapis.com/v2/token';
+    payload = {
+      client_id: clientID,
+      client_secret: clientSecret,
+      account_id: mid,
+      grant_type: 'client_credentials'
+    };
+  
+  response = HTTP.Post(endpoint, contentType, Stringify(payload));
+     //ite("response:" + response);
+      
+      var accessToken = Platform.Function.ParseJSON(response['Response'][0]).access_token;
+      //Write("accessToken" + accessToken);
+    
+
+
+    /* ------------------- Re-OptIN Process  --------------------- */
+
+    var headerNames = 'Authorization';
+    var headerValues = 'Bearer ' + accessToken;
+ 
+ var contact_update_endpoint = 'https://' + TenantEndpoint + '.rest.marketingcloudapis.com/contacts/v1/contacts';
+
+ var data = SourceDE.Rows.Retrieve(filter);
+
+ // Iterate through the rows and update each contact
+ for (var i = 0; i < data.length; i++) {
+  var contactID = data[i].ContactId;
+  var phoneNumber = data[i].ClientMobile;
+  var OptOutDate = data[i].OptOutDate;
+
+   
+    var payloadTemplate = {
+  "contactKey": "  +  contactID +  ",
+  "attributeSets": [{
+   "name": "MobileConnect Subscriptions",
+   "items": [{
+    "values": [
+     { "name": "Keyword", "value": "5b883d8a-6dd5-4b00-935f-ab3da6a89a85" },
+     { "name": "Mobile Number", "value": " + phoneNumber + " },
+     { "name": "Opt In Status", "value": "2" },
+     { "name": "Opt Out Status", "value": "0" }
+    ]
+   }]
+  }]
+      
+    }; // payloadTemplate
+   
+  // Set the values in the payload
+  payloadTemplate.contactKey = contactID;
+  payloadTemplate.attributeSets[0].items[0].values[1].value = phoneNumber;
+  
+  
+  // Make an HTTP request to your API endpoint to update the contact 
+  var req = new Script.Util.HttpRequest(contact_update_endpoint);
+  req.emptyContentHandling = 0;
+  req.retries = 2;
+  req.continueOnError = true;
+  req.contentType = "application/json"
+  req.setHeader("Authorization", headerValues);
+  req.method = "PATCH"; 
+  req.postData = Stringify(payloadTemplate);
+
+  var resp = req.send();
+       var resultStr = String(resp.content);
+    var resultJSON = Platform.Function.ParseJSON(String(resp.content));
+  //Write("resultStr:" + Stringify(resultStr));
+//Write("resultJSON:" + Stringify(resultJSON));
+   
+    //Write("contactID:" + Stringify(data[i].ContactId));
+    //Write("phoneNumber:" + Stringify(data[i].ClientMobile));
+    //Write("OptOutDate:" + Stringify(data[i].OptOutDate));
+    
+    //var rows = Platform.Function.UpdateData('MeetingScheduler_SMS_OptIn',['ContactId','ClientMobile','OptOutDate'],[contactID,phoneNumber,OptOutDate], ['OptInFlag'],['1']);
+   //Write("rows:" + rows);
+
+    if(resultJSON.operationStatus == "OK") {
+   //Retrieve the CRM Object Records  
+    Write("phoneNumber:" + phoneNumber);
+    var rs = retrievesfobjects(phoneNumber);
+    Write("rs:" + Stringify(rs));
+    var sp =  Platform.Function.ParseJSON(rs)
+     Write("rp:" + Stringify(rp));
+    } // if ok
+   
+ } // for loop
+  
+    } catch (ex) {
+
+      
+    }
+</script>
