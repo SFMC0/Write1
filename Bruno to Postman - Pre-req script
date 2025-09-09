@@ -1,0 +1,51 @@
+/* ==== Collection-level Pre-request ==== */
+
+const tokenRefreshTime = bru.getVar("dne_tokenRefreshTime") || 0;
+const minutes = 60000;
+const tokenAgeMin = Math.floor((Date.now() - tokenRefreshTime) / minutes);
+
+if (!bru.getVar("dne_etAccessToken") || tokenAgeMin >= 18) {
+    console.log("Refreshing SFMC token...");
+
+    const authRequest = {
+        url: `https://${bru.getVar("et_subdomain")}.auth.marketingcloudapis.com/v2/token`,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            grant_type: "client_credentials",
+            client_id: bru.getVar("et_clientId"),
+            client_secret: bru.getVar("et_clientSecret"),
+            account_id: bru.getVar("et_mid")
+        })
+    };
+
+    try {
+        const res = await bru.sendRequest(authRequest);
+        if (res.status === 200) {
+            const json = JSON.parse(res.body);
+            bru.setVar("dne_etAccessToken", json.access_token);
+            bru.setVar("dne_tokenRefreshTime", Date.now());
+            console.log("Token refreshed successfully");
+        } else {
+            console.error("Token refresh failed", res.body);
+        }
+    } catch (err) {
+        console.error("Error refreshing token:", err);
+    }
+} else {
+    console.log("Token still valid.");
+}
+
+// Attach token to all requests
+const accessToken = bru.getVar("dne_etAccessToken");
+if (accessToken) {
+    req.setHeader("Authorization", "Bearer " + accessToken);
+}
+
+
+// Only set Content-Type for non-GET requests
+if (req.method !== "GET") {
+    req.setHeader("Content-Type", "application/json");
+}
+
+console.log("Access token: " + bru.getVar("dne_etAccessToken"));
