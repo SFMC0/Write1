@@ -1,12 +1,11 @@
-# SFMC MCP Server - Asset Search AI Agent
-
 import os
 import json
 import requests
 import logging
+import asyncio
 from typing import Dict, Any, Optional
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError  # <-- ADD THIS
+from fastmcp.exceptions import ToolError
 from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +17,6 @@ mcp = FastMCP(
 )
 
 class SFMCClient:
-    """SFMC API Client for authentication and asset operations"""
     def __init__(self, subdomain: str, client_id: str, client_secret: str):
         self.subdomain = subdomain
         self.client_id = client_id
@@ -27,23 +25,24 @@ class SFMCClient:
         self.token_expiry = None
         self.base_url = f"https://{subdomain}.rest.marketingcloudapis.com"
 
-    def get_access_token(self) -> Dict[str, Any]:
+    def _auth_request(self) -> Dict[str, Any]:
+        auth_url = f"https://{self.subdomain}.auth.marketingcloudapis.com/v2/token"
+        auth_data = {
+            "grant_type": "client_credentials",
+            "client_id": self.client_id,
+            "client_secret": self.client_secret
+        }
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(auth_url, json=auth_data, headers=headers)
+        response.raise_for_status()
+        return response.json()
+
+    async def get_access_token(self) -> Dict[str, Any]:
+        if self.access_token and self.token_expiry and datetime.now() < self.token_expiry:
+            return {"success": True, "token": self.access_token}
+        loop = asyncio.get_event_loop()
         try:
-            if self.access_token and self.token_expiry and datetime.now() < self.token_expiry:
-                return {"success": True, "token": self.access_token}
-            auth_url = f"https://{self.subdomain}.auth.marketingcloudapis.com/v2/token"
-            auth_data = {
-                "grant_type": "client_credentials",
-                "client_id": self.client_id,
-                "client_secret": self.client_secret
-            }
-            headers = {
-                "Content-Type": "application/json"
-            }
-            logger.info(f"Authenticating with SFMC at {auth_url}")
-            response = requests.post(auth_url, json=auth_data, headers=headers)
-            response.raise_for_status()
-            token_data = response.json()
+            token_data = await loop.run_in_executor(None, self._auth_request)
             self.access_token = token_data["access_token"]
             expires_in = token_data.get("expires_in", 3600)
             self.token_expiry = datetime.now() + timedelta(seconds=expires_in - 60)
@@ -63,28 +62,24 @@ class SFMCClient:
             logger.error(error_msg)
             return {"success": False, "error": error_msg}
 
-    def search_assets(self, search_params: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _search_assets_request(self, search_params: Dict[str, Any]) -> Dict[str, Any]:
+        search_url = f"{self.base_url}/asset/v1/content/assets"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+        response = requests.get(search_url, headers=headers, params=search_params)
+        response.raise_for_status()
+        return response.json()
+
+    async def search_assets(self, search_params: Dict[str, Any] = None) -> Dict[str, Any]:
+        token_result = await self.get_access_token()
+        if not token_result["success"]:
+            return token_result
+        loop = asyncio.get_event_loop()
         try:
-            token_result = self.get_access_token()
-            if not token_result["success"]:
-                return token_result
-            search_url = f"{self.base_url}/asset/v1/content/assets"
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json"
-            }
-            default_params = {
-                "$pagesize": 50,
-                "$page": 1,
-                "$orderBy": "modifiedDate desc"
-            }
-            if search_params:
-                default_params.update(search_params)
-            logger.info(f"Searching assets with params: {default_params}")
-            response = requests.get(search_url, headers=headers, params=default_params)
-            response.raise_for_status()
-            search_results = response.json()
-            logger.info(f"Found {search_results.get('count', 0)} total assets")
+            search_params = search_params or {}
+            search_results = await loop.run_in_executor(None, self._search_assets_request, search_params)
             return {
                 "success": True,
                 "results": search_results,
@@ -101,35 +96,30 @@ class SFMCClient:
             logger.error(error_msg)
             return {"success": False, "error": error_msg}
 
-    def advanced_asset_search(self, query_body: Dict[str, Any]) -> Dict[str, Any]:
+    def _advanced_asset_search_request(self, query_body: Dict[str, Any]) -> Dict[str, Any]:
+        search_url = f"{self.base_url}/asset/v1/content/assets/query"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+        response = requests.post(search_url, headers=headers, json=query_body)
+        response.raise_for_status()
+        return response.json()
+
+    async def advanced_asset_search(self, query_body: Dict[str, Any]) -> Dict[str, Any]:
+        token_result = await self.get_access_token()
+        if not token_result["success"]:
+            return token_result
+        loop = asyncio.get_event_loop()
         try:
-            token_result = self.get_access_token()
-            if not token_result["success"]:
-                return token_result
-            search_url = f"{self.base_url}/asset/v1/content/assets/query"
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json"
-            }
-            default_query = {
-                "page": {"page": 1, "pageSize": 50},
-                "query": {"property": "name", "simpleOperator": "contains", "value": ""},
-                "sort": [{"property": "modifiedDate", "direction": "DESC"}]
-            }
-            if query_body:
-                default_query.update(query_body)
-            logger.info(f"Advanced search with query: {json.dumps(default_query, indent=2)}")
-            response = requests.post(search_url, headers=headers, json=default_query)
-            response.raise_for_status()
-            search_results = response.json()
-            logger.info(f"Advanced search found {search_results.get('count', 0)} total assets")
+            search_results = await loop.run_in_executor(None, self._advanced_asset_search_request, query_body)
             return {
                 "success": True,
                 "results": search_results,
                 "total_count": search_results.get("count", 0),
                 "page_size": search_results.get("pageSize", 50),
                 "page": search_results.get("page", 1),
-                "query_used": default_query
+                "query_used": query_body
             }
         except requests.exceptions.RequestException as e:
             error_msg = f"Advanced asset search failed: {str(e)}"
@@ -140,14 +130,41 @@ class SFMCClient:
             logger.error(error_msg)
             return {"success": False, "error": error_msg}
 
-sfmc_client = None
+    def _get_asset_by_id_request(self, asset_id: str) -> Dict[str, Any]:
+        asset_url = f"{self.base_url}/asset/v1/content/assets/{asset_id}"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+        response = requests.get(asset_url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+
+    async def get_asset_by_id(self, asset_id: str) -> Dict[str, Any]:
+        token_result = await self.get_access_token()
+        if not token_result["success"]:
+            return {"success": False, "error": token_result.get("error")}
+        loop = asyncio.get_event_loop()
+        try:
+            asset_data = await loop.run_in_executor(None, self._get_asset_by_id_request, asset_id)
+            return {"success": True, "asset": asset_data}
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Failed to retrieve asset: {str(e)}"
+            logger.error(error_msg)
+            return {"success": False, "error": error_msg}
+        except Exception as e:
+            error_msg = f"Asset retrieval error: {str(e)}"
+            logger.error(error_msg)
+            return {"success": False, "error": error_msg}
+
+sfmc_client: Optional[SFMCClient] = None
 
 @mcp.tool()
-def initialize_sfmc_connection(subdomain: str, client_id: str, client_secret: str) -> str:
+async def initialize_sfmc_connection(subdomain: str, client_id: str, client_secret: str) -> str:
     global sfmc_client
     try:
         sfmc_client = SFMCClient(subdomain, client_id, client_secret)
-        auth_result = sfmc_client.get_access_token()
+        auth_result = await sfmc_client.get_access_token()
         if auth_result["success"]:
             return f"✅ Successfully connected to SFMC instance: {subdomain}"
         else:
@@ -156,13 +173,7 @@ def initialize_sfmc_connection(subdomain: str, client_id: str, client_secret: st
         raise ToolError(f"❌ Connection initialization failed: {str(e)}")
 
 @mcp.tool()
-def search_sfmc_assets(
-    asset_name: str = "",
-    asset_type: str = "",
-    page_size: int = 50,
-    page_number: int = 1,
-    category_id: Optional[int] = None
-) -> str:
+async def search_sfmc_assets(asset_name: str = "", asset_type: str = "", page_size: int = 50, page_number: int = 1, category_id: Optional[int] = None) -> str:
     global sfmc_client
     if not sfmc_client:
         raise ToolError("❌ SFMC connection not initialized. Please call initialize_sfmc_connection first.")
@@ -176,11 +187,11 @@ def search_sfmc_assets(
             filters.append(f"name like '{asset_name}'")
         if asset_type:
             filters.append(f"assetType.name eq '{asset_type}'")
-        if category_id:
+        if category_id is not None:
             filters.append(f"category.id eq {category_id}")
         if filters:
             search_params["$filter"] = " and ".join(filters)
-        result = sfmc_client.search_assets(search_params)
+        result = await sfmc_client.search_assets(search_params)
         if result["success"]:
             assets = result["results"].get("items", [])
             formatted_results = {
@@ -213,13 +224,13 @@ def search_sfmc_assets(
         raise ToolError(f"❌ Asset search error: {str(e)}")
 
 @mcp.tool()
-def advanced_asset_search(query_json: str) -> str:
+async def advanced_asset_search(query_json: str) -> str:
     global sfmc_client
     if not sfmc_client:
         raise ToolError("❌ SFMC connection not initialized. Please call initialize_sfmc_connection first.")
     try:
         query_body = json.loads(query_json)
-        result = sfmc_client.advanced_asset_search(query_body)
+        result = await sfmc_client.advanced_asset_search(query_body)
         if result["success"]:
             return json.dumps(result, indent=2)
         else:
@@ -230,36 +241,26 @@ def advanced_asset_search(query_json: str) -> str:
         raise ToolError(f"❌ Advanced search error: {str(e)}")
 
 @mcp.tool()
-def get_asset_by_id(asset_id: str) -> str:
+async def get_asset_by_id(asset_id: str) -> str:
     global sfmc_client
     if not sfmc_client:
         raise ToolError("❌ SFMC connection not initialized. Please call initialize_sfmc_connection first.")
     try:
-        token_result = sfmc_client.get_access_token()
-        if not token_result["success"]:
-            raise ToolError(f"❌ Authentication failed: {token_result['error']}")
-        asset_url = f"{sfmc_client.base_url}/asset/v1/content/assets/{asset_id}"
-        headers = {
-            "Authorization": f"Bearer {sfmc_client.access_token}",
-            "Content-Type": "application/json"
-        }
-        logger.info(f"Retrieving asset details for ID: {asset_id}")
-        response = requests.get(asset_url, headers=headers)
-        response.raise_for_status()
-        asset_data = response.json()
-        return json.dumps(asset_data, indent=2)
-    except requests.exceptions.RequestException as e:
-        raise ToolError(f"❌ Failed to retrieve asset: {str(e)}")
+        result = await sfmc_client.get_asset_by_id(asset_id)
+        if result.get("success"):
+            return json.dumps(result["asset"], indent=2)
+        else:
+            raise ToolError(f"❌ Failed to retrieve asset: {result.get('error', 'Unknown error')}")
     except Exception as e:
         raise ToolError(f"❌ Asset retrieval error: {str(e)}")
 
 @mcp.resource("sfmc://connection/status")
-def connection_status() -> str:
+async def connection_status() -> str:
     global sfmc_client
     if not sfmc_client:
-        raise ToolError("❌ No SFMC connection established")
+        return "❌ No SFMC connection established"
     try:
-        token_result = sfmc_client.get_access_token()
+        token_result = await sfmc_client.get_access_token()
         if token_result["success"]:
             status_info = {
                 "connection_status": "✅ Connected",
@@ -281,7 +282,7 @@ def connection_status() -> str:
         raise ToolError(f"❌ Status check failed: {str(e)}")
 
 @mcp.resource("sfmc://assets/types")
-def asset_types_reference() -> str:
+async def asset_types_reference() -> str:
     try:
         asset_types = {
             "common_asset_types": {
