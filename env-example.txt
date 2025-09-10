@@ -1,0 +1,12 @@
+# SFMC AI Agent Setup Configuration
+# Copy this file to .env and fill in your SFMC credentials
+
+# SFMC Connection Details
+SFMC_SUBDOMAIN=your_subdomain_here
+SFMC_CLIENT_ID=your_client_id_here  
+SFMC_CLIENT_SECRET=your_client_secret_here
+
+# Example:
+# SFMC_SUBDOMAIN=mc123456789
+# SFMC_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# SFMC_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

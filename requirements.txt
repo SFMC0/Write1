@@ -1,0 +1,6 @@
+# Requirements for SFMC MCP Asset Search Agent
+fastmcp
+mcp
+requests
+asyncio-mqtt
+python-dotenv
